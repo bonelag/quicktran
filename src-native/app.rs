@@ -258,6 +258,9 @@ impl QuickTranApp {
     }
 
     pub fn reload_hotkeys(&mut self) {
+        self._hotkey = None;
+        std::thread::sleep(Duration::from_millis(60));
+
         self._hotkey = Some(HotkeyManager::start(
             self.hk_internal_tx.clone(),
             self.config.hotkey_translate.clone(),
@@ -319,36 +322,40 @@ impl QuickTranApp {
             match event {
                 AppEvent::Hotkey(action) => match action {
                     HotkeyAction::Translate => {
-                        let fg = capture_foreground();
-                        let captured = capture_selected_text();
-                        if let Some(text) = captured {
-                            self.source_hwnd = fg;
-                            self.source_text = text;
+                        let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+                        if is_focused && !self.source_text.trim().is_empty() {
+                            // User is actively in QuickTran typing in the input box: translate directly!
                             self.trigger_translate(false);
-                        } else if !self.source_text.trim().is_empty() {
-                            // User pressed hotkey directly while typing in the input box!
-                            self.trigger_translate(false);
-                        }
+                        } else {
+                            // User is in an external window: capture selection
+                            let fg = capture_foreground();
+                            let captured = capture_selected_text();
+                            if let Some(text) = captured {
+                                self.source_hwnd = fg;
+                                self.source_text = text;
+                                self.trigger_translate(false);
+                            } else if !self.source_text.trim().is_empty() {
+                                self.trigger_translate(false);
+                            }
 
-                        if !self.config.auto_overwrite {
-                            show_and_focus_window();
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            if !self.config.auto_overwrite {
+                                show_and_focus_window();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            }
                         }
                     }
                     HotkeyAction::Tooltip => {
-                        self.source_hwnd = capture_foreground();
-                        let captured = capture_selected_text();
-                        let text = if let Some(t) = captured {
-                            t
-                        } else if !self.source_text.trim().is_empty() {
+                        let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+                        let text = if is_focused && !self.source_text.trim().is_empty() {
                             self.source_text.clone()
                         } else {
-                            String::new()
+                            self.source_hwnd = capture_foreground();
+                            capture_selected_text().unwrap_or_else(|| self.source_text.clone())
                         };
 
-                        if !text.is_empty() {
+                        if !text.trim().is_empty() {
                             self.tooltip_source = text;
                             self.tooltip_target = "Đang dịch...".to_string();
                             self.tooltip_pos = get_mouse_pos();

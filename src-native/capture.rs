@@ -1,5 +1,4 @@
 use std::time::{Duration, Instant};
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
@@ -71,53 +70,91 @@ pub fn get_mouse_pos() -> Option<(f32, f32)> {
     None
 }
 
-pub fn send_ctrl(key: char) {
-    if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-        let k = match key {
-            'a' | 'A' => Key::A,
-            'c' | 'C' => Key::C,
-            'v' | 'V' => Key::V,
-            _ => Key::Unicode(key),
-        };
-        // Release active modifiers synthetically
-        let _ = enigo.key(Key::Alt, Direction::Release);
-        let _ = enigo.key(Key::Shift, Direction::Release);
-        let _ = enigo.key(Key::Meta, Direction::Release);
-
-        // Press Control + key
-        let _ = enigo.key(Key::Control, Direction::Press);
-        std::thread::sleep(Duration::from_millis(5));
-        let _ = enigo.key(k, Direction::Click);
-        std::thread::sleep(Duration::from_millis(5));
-        let _ = enigo.key(Key::Control, Direction::Release);
+#[cfg(windows)]
+pub fn release_all_modifiers() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, KEYEVENTF_KEYUP, VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
+        VK_MENU, VK_LMENU, VK_RMENU, VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
+        VK_LWIN, VK_RWIN,
+    };
+    unsafe {
+        keybd_event(VK_CONTROL.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LCONTROL.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_RCONTROL.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LMENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_RMENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_SHIFT.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LSHIFT.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_RSHIFT.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LWIN.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_RWIN.0 as u8, 0, KEYEVENTF_KEYUP, 0);
     }
 }
+
+#[cfg(not(windows))]
+pub fn release_all_modifiers() {}
+
+#[cfg(windows)]
+pub fn send_ctrl(key: char) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, KEYEVENTF_KEYUP, VK_CONTROL,
+    };
+
+    release_all_modifiers();
+    std::thread::sleep(Duration::from_millis(20));
+
+    let vk = match key {
+        'a' | 'A' => 0x41,
+        'c' | 'C' => 0x43,
+        'v' | 'V' => 0x56,
+        _ => key.to_ascii_uppercase() as u8,
+    };
+
+    unsafe {
+        // Press Ctrl
+        keybd_event(VK_CONTROL.0 as u8, 0, Default::default(), 0);
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Press and release key
+        keybd_event(vk, 0, Default::default(), 0);
+        std::thread::sleep(Duration::from_millis(15));
+        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Release Ctrl
+        keybd_event(VK_CONTROL.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn send_ctrl(_key: char) {}
 
 /// Capture selected text from the foreground window
 pub fn capture_selected_text() -> Option<String> {
     let prev_seq = get_clipboard_seq();
 
-    // Settle keyboard state briefly
-    std::thread::sleep(Duration::from_millis(15));
+    // Settle keyboard state briefly (wait for user's hotkey press to settle)
+    std::thread::sleep(Duration::from_millis(30));
     send_ctrl('c');
 
     let start = Instant::now();
     let mut changed = false;
 
-    // Fast sequence check
-    while start.elapsed() < Duration::from_millis(120) {
+    // Fast sequence check: wait up to 160ms for clipboard to update
+    while start.elapsed() < Duration::from_millis(160) {
         if get_clipboard_seq() != prev_seq {
             changed = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(8));
     }
 
     if !changed {
-        return None;
+        std::thread::sleep(Duration::from_millis(30));
     }
 
-    // Read clipboard only when sequence number actually changed
+    // Read clipboard
     if let Ok(mut clip) = arboard::Clipboard::new() {
         if let Ok(text) = clip.get_text() {
             let trimmed = text.trim();
@@ -138,7 +175,7 @@ pub fn paste_text(text: &str, source_hwnd: Option<isize>) {
 
     if let Some(hwnd) = source_hwnd {
         restore_foreground(hwnd);
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(30));
     }
 
     send_ctrl('v');
