@@ -244,7 +244,10 @@ function App() {
     let cleanText = text;
     const match = text.match(/<([a-zA-Z]{2}(-[a-zA-Z]{2})?)\b/);
     if (match) {
-      const code = match[1].toLowerCase();
+      let code = match[1].toLowerCase();
+      if (code === "cn") {
+        code = "zh-cn";
+      }
       const foundLang = LANGS.find((l) => l.code.toLowerCase() === code);
       if (foundLang) {
         detectedTl = foundLang.code;
