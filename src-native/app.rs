@@ -538,7 +538,7 @@ impl eframe::App for QuickTranApp {
                     .with_always_on_top()
                     .with_decorations(false);
 
-                if let Some((px, py)) = self.tooltip_pos {
+                if let Some((px, py)) = self.tooltip_pos.take() {
                     let ppp = ctx.pixels_per_point();
                     let mx = px / ppp;
                     let my = py / ppp;
@@ -555,6 +555,8 @@ impl eframe::App for QuickTranApp {
                 let latency = self.tooltip_latency;
                 let engine = self.tooltip_engine.clone();
 
+                let mut reset_timer = false;
+
                 ctx.show_viewport_immediate(
                     egui::ViewportId::from_hash_of("quicktran_tooltip"),
                     vb,
@@ -566,7 +568,7 @@ impl eframe::App for QuickTranApp {
                             close_tooltip = true;
                         }
 
-                        egui::CentralPanel::default()
+                        let panel_res = egui::CentralPanel::default()
                             .frame(
                                 egui::Frame::NONE
                                     .fill(egui::Color32::from_rgb(26, 27, 38))
@@ -575,7 +577,7 @@ impl eframe::App for QuickTranApp {
                                     .inner_margin(12.0),
                             )
                             .show(ctx, |ui| {
-                                ui.horizontal(|ui| {
+                                let header_res = ui.horizontal(|ui| {
                                     ui.colored_label(egui::Color32::from_rgb(122, 162, 247), "⚡ QuickTran Tooltip");
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         let close_btn = egui::Button::new(
@@ -587,7 +589,11 @@ impl eframe::App for QuickTranApp {
                                             close_tooltip = true;
                                         }
                                     });
-                                });
+                                }).response;
+
+                                if header_res.interact(egui::Sense::drag()).drag_started() {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                                }
 
                                 ui.add_space(4.0);
                                 ui.label(egui::RichText::new(&source_text).italics().weak().size(11.0));
@@ -608,9 +614,21 @@ impl eframe::App for QuickTranApp {
                                         }
                                     });
                                 });
-                            });
+                            }).response;
+
+                        if panel_res.interact(egui::Sense::drag()).drag_started() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
+
+                        if panel_res.hovered() || panel_res.dragged() {
+                            reset_timer = true;
+                        }
                     },
                 );
+
+                if reset_timer {
+                    self.tooltip_timer = Instant::now();
+                }
 
                 if close_tooltip {
                     self.show_tooltip = false;
