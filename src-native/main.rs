@@ -11,9 +11,6 @@ use app::QuickTranApp;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
-    std::panic::set_hook(Box::new(|info| {
-        let _ = std::fs::write("panic.log", format!("{:?}", info));
-    }));
     let icon_data = match image::load_from_memory(include_bytes!("../src-tauri/icons/32x32.png")) {
         Ok(img) => {
             let rgba = img.into_rgba8();
@@ -41,13 +38,9 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let res = eframe::run_native(
+    eframe::run_native(
         "QuickTran Native",
         options,
         Box::new(|cc| Ok(Box::new(QuickTranApp::new(cc)))),
-    );
-    if let Err(ref e) = res {
-        let _ = std::fs::write("error.log", format!("{:?}", e));
-    }
-    res
+    )
 }
