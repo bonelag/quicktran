@@ -8,7 +8,6 @@ pub enum HotkeyAction {
     Tooltip,
 }
 
-
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
@@ -18,6 +17,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
 };
+
+#[cfg(windows)]
+extern "system" {
+    fn GetCurrentThreadId() -> u32;
+    fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: usize, lParam: isize) -> i32;
+}
+#[cfg(windows)]
+const WM_QUIT: u32 = 0x0012;
 
 #[cfg(windows)]
 fn parse_shortcut(sc: &str) -> (HOT_KEY_MODIFIERS, u32) {
@@ -37,6 +44,18 @@ fn parse_shortcut(sc: &str) -> (HOT_KEY_MODIFIERS, u32) {
                     vk = ch as u32;
                 }
             }
+            s if s.starts_with("KEY") && s.len() == 4 => {
+                let ch = s.chars().nth(3).unwrap();
+                if ch.is_ascii_alphanumeric() {
+                    vk = ch as u32;
+                }
+            }
+            s if s.starts_with("DIGIT") && s.len() == 6 => {
+                let ch = s.chars().nth(5).unwrap();
+                if ch.is_ascii_digit() {
+                    vk = ch as u32;
+                }
+            }
             s if s.starts_with('F') && s.len() <= 3 => {
                 if let Ok(num) = s[1..].parse::<u32>() {
                     if (1..=12).contains(&num) {
@@ -45,6 +64,7 @@ fn parse_shortcut(sc: &str) -> (HOT_KEY_MODIFIERS, u32) {
                 }
             }
             "SPACE" => vk = 0x20,
+            "TAB" => vk = 0x09,
             _ => {}
         }
     }
@@ -54,6 +74,7 @@ fn parse_shortcut(sc: &str) -> (HOT_KEY_MODIFIERS, u32) {
 
 pub struct HotkeyManager {
     running: Arc<AtomicBool>,
+    thread_id: u32,
 }
 
 impl HotkeyManager {
@@ -64,9 +85,13 @@ impl HotkeyManager {
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
+        let (tid_tx, tid_rx) = std::sync::mpsc::channel();
 
         #[cfg(windows)]
         std::thread::spawn(move || {
+            let thread_id = unsafe { GetCurrentThreadId() };
+            let _ = tid_tx.send(thread_id);
+
             let (mods_trans, vk_trans) = parse_shortcut(&shortcut_translate);
             let (mods_tool, vk_tool) = parse_shortcut(&shortcut_tooltip);
 
@@ -92,9 +117,13 @@ impl HotkeyManager {
                                 }
                                 _ => {}
                             }
+                        } else if msg.message == WM_QUIT {
+                            break;
                         }
                         let _ = TranslateMessage(&msg);
                         DispatchMessageW(&msg);
+                    } else {
+                        break;
                     }
                 }
             }
@@ -105,12 +134,19 @@ impl HotkeyManager {
             }
         });
 
-        Self { running }
+        let thread_id = tid_rx.recv().unwrap_or(0);
+        Self { running, thread_id }
     }
 }
 
 impl Drop for HotkeyManager {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+        #[cfg(windows)]
+        if self.thread_id != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0);
+            }
+        }
     }
 }

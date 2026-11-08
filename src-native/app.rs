@@ -54,9 +54,88 @@ pub enum ViewMode {
     Settings,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HotkeyConfig {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub win: bool,
+    pub key: String,
+}
+
+impl HotkeyConfig {
+    pub fn to_shortcut_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl { parts.push("Ctrl"); }
+        if self.shift { parts.push("Shift"); }
+        if self.alt { parts.push("Alt"); }
+        if self.win { parts.push("Win"); }
+        let clean_key = if let Some(stripped) = self.key.strip_prefix("Key") {
+            stripped
+        } else if let Some(stripped) = self.key.strip_prefix("Digit") {
+            stripped
+        } else {
+            &self.key
+        };
+        parts.push(clean_key);
+        parts.join("+")
+    }
+
+    pub fn from_shortcut_string(s: &str, default_key: &str) -> Self {
+        let mut ctrl = false;
+        let mut shift = false;
+        let mut alt = false;
+        let mut win = false;
+        let mut key = default_key.to_string();
+
+        for part in s.split('+') {
+            let p = part.trim();
+            match p.to_uppercase().as_str() {
+                "CTRL" | "CONTROL" => ctrl = true,
+                "SHIFT" => shift = true,
+                "ALT" => alt = true,
+                "WIN" | "SUPER" | "META" => win = true,
+                other if !other.is_empty() => {
+                    let k = if let Some(stripped) = p.strip_prefix("Key") {
+                        stripped
+                    } else if let Some(stripped) = p.strip_prefix("Digit") {
+                        stripped
+                    } else {
+                        p
+                    };
+                    key = k.to_uppercase();
+                }
+                _ => {}
+            }
+        }
+
+        Self { ctrl, shift, alt, win, key }
+    }
+}
+
+pub const POPULAR_KEYS: &[&str] = &[
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "Space",
+];
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum ListeningTarget {
+    Translate,
+    Tooltip,
+}
+
 pub struct QuickTranApp {
     pub config: AppConfig,
     pub view_mode: ViewMode,
+
+    // Hotkey configs & state
+    pub hk_internal_tx: Sender<HotkeyAction>,
+    pub hotkey_translate_cfg: HotkeyConfig,
+    pub hotkey_tooltip_cfg: HotkeyConfig,
+    pub listening_hotkey: Option<ListeningTarget>,
 
     // Translation fields
     pub source_text: String,
@@ -115,8 +194,11 @@ impl QuickTranApp {
         // Hotkey manager
         let hotkey_tx = tx.clone();
         let (hk_internal_tx, hk_internal_rx) = channel::<HotkeyAction>();
+        let hotkey_translate_cfg = HotkeyConfig::from_shortcut_string(&config.hotkey_translate, "T");
+        let hotkey_tooltip_cfg = HotkeyConfig::from_shortcut_string(&config.hotkey_tooltip, "D");
+
         let hotkey_mgr = HotkeyManager::start(
-            hk_internal_tx,
+            hk_internal_tx.clone(),
             config.hotkey_translate.clone(),
             config.hotkey_tooltip.clone(),
         );
@@ -134,6 +216,11 @@ impl QuickTranApp {
         Self {
             config,
             view_mode: ViewMode::Translator,
+            hk_internal_tx,
+            hotkey_translate_cfg,
+            hotkey_tooltip_cfg,
+            listening_hotkey: None,
+
             source_text: String::new(),
             target_text: String::new(),
             current_engine_badge: String::new(),
@@ -159,6 +246,21 @@ impl QuickTranApp {
             _tray: tray,
             _hotkey: Some(hotkey_mgr),
         }
+    }
+
+    pub fn apply_hotkeys(&mut self) {
+        self.config.hotkey_translate = self.hotkey_translate_cfg.to_shortcut_string();
+        self.config.hotkey_tooltip = self.hotkey_tooltip_cfg.to_shortcut_string();
+        self.config.save();
+        self.reload_hotkeys();
+    }
+
+    pub fn reload_hotkeys(&mut self) {
+        self._hotkey = Some(HotkeyManager::start(
+            self.hk_internal_tx.clone(),
+            self.config.hotkey_translate.clone(),
+            self.config.hotkey_tooltip.clone(),
+        ));
     }
 
     pub fn trigger_translate(&mut self, is_tooltip: bool) {
@@ -307,6 +409,67 @@ impl eframe::App for QuickTranApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_events(ctx);
 
+        // Handle hotkey keypress capture when in listening mode
+        if let Some(target) = self.listening_hotkey {
+            let mut captured = None;
+            ctx.input(|i| {
+                for event in &i.raw.events {
+                    if let egui::Event::Key { key, pressed: true, modifiers, .. } = event {
+                        if *key == egui::Key::Escape {
+                            captured = Some((None, *modifiers));
+                            break;
+                        }
+
+                        let k_str = match key {
+                            egui::Key::A => "A", egui::Key::B => "B", egui::Key::C => "C",
+                            egui::Key::D => "D", egui::Key::E => "E", egui::Key::F => "F",
+                            egui::Key::G => "G", egui::Key::H => "H", egui::Key::I => "I",
+                            egui::Key::J => "J", egui::Key::K => "K", egui::Key::L => "L",
+                            egui::Key::M => "M", egui::Key::N => "N", egui::Key::O => "O",
+                            egui::Key::P => "P", egui::Key::Q => "Q", egui::Key::R => "R",
+                            egui::Key::S => "S", egui::Key::T => "T", egui::Key::U => "U",
+                            egui::Key::V => "V", egui::Key::W => "W", egui::Key::X => "X",
+                            egui::Key::Y => "Y", egui::Key::Z => "Z",
+                            egui::Key::Num0 => "0", egui::Key::Num1 => "1", egui::Key::Num2 => "2",
+                            egui::Key::Num3 => "3", egui::Key::Num4 => "4", egui::Key::Num5 => "5",
+                            egui::Key::Num6 => "6", egui::Key::Num7 => "7", egui::Key::Num8 => "8",
+                            egui::Key::Num9 => "9",
+                            egui::Key::F1 => "F1", egui::Key::F2 => "F2", egui::Key::F3 => "F3",
+                            egui::Key::F4 => "F4", egui::Key::F5 => "F5", egui::Key::F6 => "F6",
+                            egui::Key::F7 => "F7", egui::Key::F8 => "F8", egui::Key::F9 => "F9",
+                            egui::Key::F10 => "F10", egui::Key::F11 => "F11", egui::Key::F12 => "F12",
+                            egui::Key::Space => "Space",
+                            egui::Key::Tab => "Tab",
+                            _ => "",
+                        };
+
+                        if !k_str.is_empty() {
+                            captured = Some((Some(k_str.to_string()), *modifiers));
+                            break;
+                        }
+                    }
+                }
+            });
+
+            if let Some((k_opt, m)) = captured {
+                self.listening_hotkey = None;
+                if let Some(k) = k_opt {
+                    let cfg = match target {
+                        ListeningTarget::Translate => &mut self.hotkey_translate_cfg,
+                        ListeningTarget::Tooltip => &mut self.hotkey_tooltip_cfg,
+                    };
+                    cfg.key = k;
+                    if m.ctrl || m.alt || m.shift || m.mac_cmd {
+                        cfg.ctrl = m.ctrl;
+                        cfg.alt = m.alt;
+                        cfg.shift = m.shift;
+                        cfg.win = m.mac_cmd;
+                    }
+                    self.apply_hotkeys();
+                }
+            }
+        }
+
         // Intercept close button if close_to_tray is enabled
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.config.close_to_tray {
@@ -315,8 +478,8 @@ impl eframe::App for QuickTranApp {
             }
         }
 
-        // Hide on Escape key
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Hide on Escape key (when not listening for key)
+        if self.listening_hotkey.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.view_mode == ViewMode::Settings {
                 self.view_mode = ViewMode::Translator;
             } else if self.config.close_to_tray {
@@ -682,9 +845,123 @@ fn render_settings_view(app: &mut QuickTranApp, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.strong("Phím tắt toàn hệ thống");
             ui.add_space(4.0);
-            ui.label(format!("• Dịch chính: {}", app.config.hotkey_translate));
-            ui.label(format!("• Tooltip nổi: {}", app.config.hotkey_tooltip));
-            ui.weak("(Phím tắt mặc định Alt+T để dịch / ghi đè, Alt+D để hiện tooltip)");
+
+            // 1. Dịch chính
+            ui.label(egui::RichText::new("• Dịch chính (Cửa sổ chính / Ghi đè văn bản):").strong());
+            ui.horizontal(|ui| {
+                let mut changed = false;
+                changed |= ui.checkbox(&mut app.hotkey_translate_cfg.ctrl, "Ctrl").changed();
+                changed |= ui.checkbox(&mut app.hotkey_translate_cfg.shift, "Shift").changed();
+                changed |= ui.checkbox(&mut app.hotkey_translate_cfg.alt, "Alt").changed();
+                changed |= ui.checkbox(&mut app.hotkey_translate_cfg.win, "Win").changed();
+                if changed {
+                    app.apply_hotkeys();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                let mut changed = false;
+                let is_listening = app.listening_hotkey == Some(ListeningTarget::Translate);
+                let btn_text = if is_listening {
+                    "⌨ Nhấn phím bất kỳ..."
+                } else {
+                    &format!("Phím: {}", app.hotkey_translate_cfg.key)
+                };
+
+                let btn = egui::Button::new(
+                    egui::RichText::new(btn_text)
+                        .color(if is_listening { egui::Color32::from_rgb(250, 204, 21) } else { egui::Color32::WHITE })
+                );
+                if ui.add(btn).clicked() {
+                    if is_listening {
+                        app.listening_hotkey = None;
+                    } else {
+                        app.listening_hotkey = Some(ListeningTarget::Translate);
+                    }
+                }
+
+                egui::ComboBox::from_id_salt("key_select_translate")
+                    .selected_text(&app.hotkey_translate_cfg.key)
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        for &k in POPULAR_KEYS {
+                            if ui.selectable_value(&mut app.hotkey_translate_cfg.key, k.to_string(), k).clicked() {
+                                changed = true;
+                            }
+                        }
+                    });
+
+                ui.label(
+                    egui::RichText::new(format!("→ {}", app.hotkey_translate_cfg.to_shortcut_string()))
+                        .color(egui::Color32::from_rgb(96, 165, 250))
+                        .strong(),
+                );
+
+                if changed {
+                    app.apply_hotkeys();
+                }
+            });
+
+            ui.add_space(8.0);
+
+            // 2. Tooltip nổi
+            ui.label(egui::RichText::new("• Tooltip nổi (Xem bản dịch nhanh tại con trỏ):").strong());
+            ui.horizontal(|ui| {
+                let mut changed = false;
+                changed |= ui.checkbox(&mut app.hotkey_tooltip_cfg.ctrl, "Ctrl").changed();
+                changed |= ui.checkbox(&mut app.hotkey_tooltip_cfg.shift, "Shift").changed();
+                changed |= ui.checkbox(&mut app.hotkey_tooltip_cfg.alt, "Alt").changed();
+                changed |= ui.checkbox(&mut app.hotkey_tooltip_cfg.win, "Win").changed();
+                if changed {
+                    app.apply_hotkeys();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                let mut changed = false;
+                let is_listening = app.listening_hotkey == Some(ListeningTarget::Tooltip);
+                let btn_text = if is_listening {
+                    "⌨ Nhấn phím bất kỳ..."
+                } else {
+                    &format!("Phím: {}", app.hotkey_tooltip_cfg.key)
+                };
+
+                let btn = egui::Button::new(
+                    egui::RichText::new(btn_text)
+                        .color(if is_listening { egui::Color32::from_rgb(250, 204, 21) } else { egui::Color32::WHITE })
+                );
+                if ui.add(btn).clicked() {
+                    if is_listening {
+                        app.listening_hotkey = None;
+                    } else {
+                        app.listening_hotkey = Some(ListeningTarget::Tooltip);
+                    }
+                }
+
+                egui::ComboBox::from_id_salt("key_select_tooltip")
+                    .selected_text(&app.hotkey_tooltip_cfg.key)
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        for &k in POPULAR_KEYS {
+                            if ui.selectable_value(&mut app.hotkey_tooltip_cfg.key, k.to_string(), k).clicked() {
+                                changed = true;
+                            }
+                        }
+                    });
+
+                ui.label(
+                    egui::RichText::new(format!("→ {}", app.hotkey_tooltip_cfg.to_shortcut_string()))
+                        .color(egui::Color32::from_rgb(96, 165, 250))
+                        .strong(),
+                );
+
+                if changed {
+                    app.apply_hotkeys();
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.weak("(Bấm nút 'Phím: ...' để gõ phím trực tiếp từ bàn phím, hoặc chọn từ danh sách)");
         });
 
         ui.add_space(8.0);
