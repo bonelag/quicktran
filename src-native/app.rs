@@ -331,17 +331,15 @@ impl QuickTranApp {
                             // User is in an external window: capture foreground window
                             self.source_hwnd = capture_foreground();
 
-                            // Automatically Ctrl+A then Ctrl+C to get full text (just like WebView)
+                            // Automatically Ctrl+A then Ctrl+C to get fresh text from target window
                             if let Some(text) = capture_all_text() {
                                 self.source_text = text;
                                 self.trigger_translate(false);
-                            } else if !self.source_text.trim().is_empty() {
-                                self.trigger_translate(false);
-                            }
 
-                            if !self.config.auto_overwrite {
-                                show_and_focus_window();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                                if !self.config.auto_overwrite {
+                                    show_and_focus_window();
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                                }
                             }
                         }
                     }
@@ -349,19 +347,21 @@ impl QuickTranApp {
                         let is_focused = !is_window_hidden_to_tray()
                             && ctx.input(|i| i.viewport().focused.unwrap_or(false));
                         let text = if is_focused && !self.source_text.trim().is_empty() {
-                            self.source_text.clone()
+                            Some(self.source_text.clone())
                         } else {
                             self.source_hwnd = capture_foreground();
-                            capture_selected_text().unwrap_or_else(|| self.source_text.clone())
+                            capture_selected_text()
                         };
 
-                        if !text.trim().is_empty() {
-                            self.tooltip_source = text;
-                            self.tooltip_target = "Đang dịch...".to_string();
-                            self.tooltip_pos = get_mouse_pos();
-                            self.show_tooltip = true;
-                            self.tooltip_timer = Instant::now();
-                            self.trigger_translate(true);
+                        if let Some(t) = text {
+                            if !t.trim().is_empty() {
+                                self.tooltip_source = t;
+                                self.tooltip_target = "Đang dịch...".to_string();
+                                self.tooltip_pos = get_mouse_pos();
+                                self.show_tooltip = true;
+                                self.tooltip_timer = Instant::now();
+                                self.trigger_translate(true);
+                            }
                         }
                     }
                 },
