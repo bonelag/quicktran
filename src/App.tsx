@@ -79,6 +79,47 @@ interface AISettings {
   userPrompt: string;
 }
 
+export type EngineType =
+  | "google_pa"
+  | "microsoft"
+  | "modernmt"
+  | "bing"
+  | "google"
+  | "papago"
+  | "yandex"
+  | "translate_com"
+  | "mymemory"
+  | "deepl"
+  | "ai";
+
+export const FREE_ENGINES: { id: EngineType; name: string }[] = [
+  { id: "google_pa", name: "Google Translate (Chrome PA)" },
+  { id: "microsoft", name: "Microsoft Translator" },
+  { id: "modernmt", name: "ModernMT" },
+  { id: "bing", name: "Bing Translator" },
+  { id: "google", name: "Google Translate (Web GTX)" },
+  { id: "papago", name: "Naver Papago" },
+  { id: "yandex", name: "Yandex Translator" },
+  { id: "translate_com", name: "Translate.com" },
+  { id: "mymemory", name: "MyMemory" },
+  { id: "deepl", name: "DeepL (Web / Free)" },
+];
+
+interface TranslationResult {
+  text: string;
+  engine: string;
+  fallback_from?: string | null;
+}
+
+export interface EngineBenchmark {
+  id: EngineType;
+  name: string;
+  latency_ms: number;
+  sample: string;
+  success: boolean;
+  error?: string | null;
+}
+
 interface HotkeyConfig {
   ctrl: boolean;
   shift: boolean;
@@ -89,7 +130,8 @@ interface HotkeyConfig {
 
 interface AppSettings {
   autoPaste: boolean;
-  engine: "google" | "ai";
+  engine: EngineType;
+  autoFallback: boolean;
   ai: AISettings;
   shortcut: HotkeyConfig;
   tooltipShortcut: HotkeyConfig;
@@ -100,7 +142,8 @@ interface AppSettings {
 const getDefaultSettings = (): AppSettings => {
   return {
     autoPaste: false,
-    engine: "google",
+    engine: "google_pa",
+    autoFallback: true,
     ai: {
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
@@ -138,6 +181,7 @@ function App() {
   // Settings States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(getDefaultSettings);
+  const [fallbackInfo, setFallbackInfo] = useState<{ from: string; to: string } | null>(null);
 
   const appWindow = getCurrentWindow();
   const isTooltip = appWindow.label === "tooltip";
@@ -163,6 +207,8 @@ function App() {
             setSettings({
               ...getDefaultSettings(),
               ...data.settings,
+              engine: data.settings.engine || "google_pa",
+              autoFallback: data.settings.autoFallback !== undefined ? data.settings.autoFallback : true,
               shortcut: {
                 ...getDefaultSettings().shortcut,
                 ...(data.settings.shortcut || {})
@@ -197,7 +243,8 @@ function App() {
   }
   
   // Form States (for settings panel)
-  const [formEngine, setFormEngine] = useState<"google" | "ai">("google");
+  const [formEngine, setFormEngine] = useState<EngineType>("google_pa");
+  const [formAutoFallback, setFormAutoFallback] = useState(true);
   const [formAi, setFormAi] = useState<AISettings>({
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
@@ -226,6 +273,83 @@ function App() {
   
   const [modelList, setModelList] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
+
+  const [benchmarking, setBenchmarking] = useState(false);
+  const [benchmarks, setBenchmarks] = useState<EngineBenchmark[] | null>(null);
+
+  async function runSpeedTest() {
+    setBenchmarking(true);
+    setBenchmarks(null);
+    try {
+      const results = await invoke<EngineBenchmark[]>("benchmark_engines", {
+        target: formTooltipTarget || "vi",
+      });
+
+      let allResults = [...results];
+      if (formEngine === "ai" || formAi.apiKey || formAi.provider === "custom") {
+        const start = performance.now();
+        try {
+          const targetLangName = LANGS.find((l) => l.code === (formTooltipTarget || "vi"))?.name || "Vietnamese";
+          const sysPrompt = formAi.systemPrompt
+            .split("{source}").join("auto-detect")
+            .split("{target}").join(targetLangName)
+            .split("{text}").join("Hello world");
+          const userPrompt = formAi.userPrompt
+            .split("{source}").join("auto-detect")
+            .split("{target}").join(targetLangName)
+            .split("{text}").join("Hello world");
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (formAi.apiKey) headers["Authorization"] = `Bearer ${formAi.apiKey}`;
+          const body = {
+            model: formAi.model,
+            messages: [
+              { role: "system", content: sysPrompt },
+              { role: "user", content: userPrompt }
+            ],
+            temperature: 0.3,
+          };
+          const res = await invoke<any>("request_post", {
+            url: `${formAi.baseUrl}/chat/completions`,
+            headers,
+            body
+          });
+          const elapsed = Math.round(performance.now() - start);
+          const sample = res?.choices?.[0]?.message?.content || "";
+          allResults.push({
+            id: "ai",
+            name: `AI (${PROVIDERS[formAi.provider]?.name || "Custom"})`,
+            latency_ms: elapsed,
+            sample: sample.trim(),
+            success: !!sample,
+            error: sample ? null : "Nội dung AI rỗng"
+          });
+        } catch (e) {
+          const elapsed = Math.round(performance.now() - start);
+          allResults.push({
+            id: "ai",
+            name: `AI (${PROVIDERS[formAi.provider]?.name || "Custom"})`,
+            latency_ms: elapsed,
+            sample: "",
+            success: false,
+            error: String(e)
+          });
+        }
+      }
+
+      allResults.sort((a, b) => {
+        if (a.success && b.success) return a.latency_ms - b.latency_ms;
+        if (a.success) return -1;
+        if (b.success) return 1;
+        return 0;
+      });
+
+      setBenchmarks(allResults);
+    } catch (e) {
+      alert("Lỗi khi đo tốc độ: " + String(e));
+    } finally {
+      setBenchmarking(false);
+    }
+  }
   
   // Bump on each request so a stale response can't overwrite a newer one.
   const reqId = useRef(0);
@@ -263,8 +387,18 @@ function App() {
 
     try {
       let out = "";
-      if (currentSettings.engine === "google") {
-        out = await invoke<string>("translate", { text: cleanText, target: detectedTl });
+      if (currentSettings.engine !== "ai") {
+        const res = await invoke<TranslationResult>("translate", {
+          text: cleanText,
+          target: detectedTl,
+          engine: currentSettings.engine,
+        });
+        out = res.text;
+        if (res.fallback_from) {
+          setFallbackInfo({ from: res.fallback_from, to: res.engine });
+        } else {
+          setFallbackInfo(null);
+        }
       } else {
         const ai = currentSettings.ai;
         const targetLangName = LANGS.find((l) => l.code === detectedTl)?.name || detectedTl;
@@ -297,11 +431,26 @@ function App() {
         };
 
         const url = `${ai.baseUrl}/chat/completions`;
-        const responseJson = await invoke<any>("request_post", { url, headers, body });
-        
-        out = responseJson?.choices?.[0]?.message?.content || "";
-        if (!out) {
-          throw new Error("Empty response from AI provider");
+        try {
+          const responseJson = await invoke<any>("request_post", { url, headers, body });
+          out = responseJson?.choices?.[0]?.message?.content || "";
+          if (!out) {
+            throw new Error("Empty response from AI provider");
+          }
+          setFallbackInfo(null);
+        } catch (aiErr) {
+          if (currentSettings.autoFallback) {
+            console.warn("AI translation failed, falling back to free engine:", aiErr);
+            const fallbackRes = await invoke<TranslationResult>("translate", {
+              text: cleanText,
+              target: detectedTl,
+              engine: "google_pa",
+            });
+            out = fallbackRes.text;
+            setFallbackInfo({ from: "ai", to: fallbackRes.engine });
+          } else {
+            throw aiErr;
+          }
         }
       }
       
@@ -383,16 +532,35 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [isListeningTooltip]);
 
-  // Hotkey capture event from Rust.
+  // Hotkey capture event from Rust (both standard and native fast-path)
   useEffect(() => {
-    const un = listen<string>("captured", (e) => {
+    const unCaptured = listen<string>("captured", (e) => {
       const text = e.payload || "";
       setOriginal(text);
       setTranslation("");
       runTranslate(text, target, settings, true);
     });
+
+    const unTranslated = listen<{
+      original: string;
+      translation: string;
+      engine: string;
+      fallback_from?: string;
+    }>("captured-translated", (e) => {
+      const p = e.payload;
+      setOriginal(p.original);
+      setTranslation(p.translation);
+      setStatus("idle");
+      if (p.fallback_from) {
+        setFallbackInfo({ from: p.fallback_from, to: p.engine });
+      } else {
+        setFallbackInfo(null);
+      }
+    });
+
     return () => {
-      un.then((f) => f());
+      unCaptured.then((f) => f());
+      unTranslated.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, settings]);
@@ -466,6 +634,7 @@ function App() {
   function handleOpenSettings() {
     const s = settings;
     setFormEngine(s.engine);
+    setFormAutoFallback(s.autoFallback !== undefined ? s.autoFallback : true);
     setFormAi({ ...s.ai });
     setFormAutoPaste(s.autoPaste);
     setFormShortcut({
@@ -486,6 +655,7 @@ function App() {
     const newSettings: AppSettings = {
       autoPaste: formAutoPaste,
       engine: formEngine,
+      autoFallback: formAutoFallback,
       ai: formAi,
       shortcut: formShortcut,
       tooltipShortcut: formTooltipShortcut,
@@ -689,10 +859,96 @@ function App() {
 
             <div className="form-group">
               <label>Translation Engine</label>
-              <select value={formEngine} onChange={(e) => setFormEngine(e.target.value as "google" | "ai")}>
-                <option value="google">Google Translate (Free)</option>
-                <option value="ai">AI (OpenAI-compatible)</option>
+              <select value={formEngine} onChange={(e) => setFormEngine(e.target.value as EngineType)}>
+                <optgroup label="Free Engines (Tự động fallback khi lỗi / 429)">
+                  {FREE_ENGINES.map((eng) => (
+                    <option key={eng.id} value={eng.id}>
+                      {eng.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Custom AI">
+                  <option value="ai">AI (OpenAI-compatible)</option>
+                </optgroup>
               </select>
+            </div>
+
+            <div className="form-group checkbox-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={formAutoFallback}
+                  onChange={(e) => setFormAutoFallback(e.target.checked)}
+                />
+                Tự động chuyển sang công cụ free khác nếu bị lỗi (chỉ lần dịch đó)
+              </label>
+            </div>
+
+            <div className="speed-test-section">
+              <div className="speed-test-header">
+                <span className="speed-test-title">Kiểm tra tốc độ phản hồi</span>
+                <button
+                  type="button"
+                  className="speed-test-btn"
+                  onClick={runSpeedTest}
+                  disabled={benchmarking}
+                >
+                  {benchmarking ? "⚡ Đang test các engine…" : "⚡ Test tốc độ các engine"}
+                </button>
+              </div>
+
+              {benchmarks && (
+                <div className="speed-test-results">
+                  {benchmarks.map((b, idx) => (
+                    <div
+                      key={b.id}
+                      className={`speed-test-item ${b.success ? "ok" : "err"} ${formEngine === b.id ? "active" : ""}`}
+                    >
+                      <div className="speed-test-main">
+                        <div className="speed-test-name-group">
+                          <span className="speed-test-name">{b.name}</span>
+                          {idx === 0 && b.success && (
+                            <span className="fastest-badge">⚡ Nhanh nhất</span>
+                          )}
+                          {formEngine === b.id && (
+                            <span className="selected-badge">Đang dùng</span>
+                          )}
+                        </div>
+                        <div className="speed-test-latency-group">
+                          {b.success ? (
+                            <span className={`latency-num ${b.latency_ms < 350 ? "lat-fast" : b.latency_ms < 800 ? "lat-mid" : "lat-slow"}`}>
+                              {b.latency_ms < 1000 ? `${b.latency_ms}ms` : `${(b.latency_ms / 1000).toFixed(2)}s`}
+                            </span>
+                          ) : (
+                            <span className="latency-num lat-err">Lỗi</span>
+                          )}
+                          {b.success && formEngine !== b.id && (
+                            <button
+                              type="button"
+                              className="use-engine-btn"
+                              onClick={() => setFormEngine(b.id)}
+                              title="Chọn engine này làm mặc định"
+                            >
+                              Chọn
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="speed-test-sub">
+                        {b.success ? (
+                          <span className="speed-test-sample" title={b.sample}>
+                            "{b.sample}"
+                          </span>
+                        ) : (
+                          <span className="speed-test-error" title={b.error || ""}>
+                            {b.error}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {formEngine === "ai" && (
@@ -802,7 +1058,10 @@ function App() {
     return (
       <div className="tooltip-container">
         <header className="tooltip-header">
-          <span className="tooltip-title">QuickTran</span>
+          <span className="tooltip-title">
+            QuickTran
+            {fallbackInfo && <span className="tooltip-fallback-tag"> ({fallbackInfo.to})</span>}
+          </span>
           <button className="tooltip-close" onClick={() => invoke("hide_window")} title="Close">
             ✕
           </button>
@@ -861,6 +1120,11 @@ function App() {
 
       <label className="lbl">
         Translation {status === "loading" && <span className="spin">…</span>}
+        {fallbackInfo && (
+          <span className="fallback-badge" title={`Tự động chuyển từ ${fallbackInfo.from} sang ${fallbackInfo.to} do lỗi`}>
+            ⇄ fallback: {fallbackInfo.to}
+          </span>
+        )}
       </label>
       <textarea
         className="box"

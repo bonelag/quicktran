@@ -32,4 +32,9 @@ tauri-plugin-single-instance = "2"
 enigo = "0.6.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+regex = "1"
+base64 = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
+md-5 = "0.10"
 

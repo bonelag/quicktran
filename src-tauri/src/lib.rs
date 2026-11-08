@@ -26,6 +26,22 @@ struct SourceHwnd(Mutex<Option<isize>>);
 struct ActiveShortcut(Mutex<Option<Shortcut>>);
 struct ActiveTooltipShortcut(Mutex<Option<Shortcut>>);
 
+#[cfg(windows)]
+#[link(name = "user32")]
+extern "system" {
+    fn GetClipboardSequenceNumber() -> u32;
+}
+
+#[cfg(windows)]
+fn get_clipboard_seq() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+#[cfg(not(windows))]
+fn get_clipboard_seq() -> u32 {
+    0
+}
+
 /// Send a Ctrl+<key> combo to the OS via synthetic input.
 fn send_ctrl(key: char) {
     if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
@@ -35,19 +51,16 @@ fn send_ctrl(key: char) {
             'v' | 'V' => Key::V,
             _ => Key::Unicode(key),
         };
-        // Press Control first to intercept Alt-menu focus
-        let _ = enigo.key(Key::Control, Direction::Press);
-        // Release active modifiers synthetically
+        // Release active modifiers synthetically so hotkey modifiers don't conflict
         let _ = enigo.key(Key::Alt, Direction::Release);
         let _ = enigo.key(Key::Shift, Direction::Release);
         let _ = enigo.key(Key::Meta, Direction::Release);
 
-        // Press character key, hold for 50ms, then release
-        let _ = enigo.key(k, Direction::Press);
-        std::thread::sleep(Duration::from_millis(50));
-        let _ = enigo.key(k, Direction::Release);
-
-        // Release Control
+        // Press Control + key quickly (5ms)
+        let _ = enigo.key(Key::Control, Direction::Press);
+        std::thread::sleep(Duration::from_millis(5));
+        let _ = enigo.key(k, Direction::Click);
+        std::thread::sleep(Duration::from_millis(5));
         let _ = enigo.key(Key::Control, Direction::Release);
     }
 }
@@ -83,36 +96,70 @@ fn handle_capture(app: &AppHandle, is_tooltip: bool) {
         *app.state::<SourceHwnd>().0.lock().unwrap() = Some(hwnd);
     }
 
-    let old_text = app.clipboard().read_text().unwrap_or_default();
-
-    // Sleep a short moment to let keyboard state settle
-    std::thread::sleep(Duration::from_millis(100));
+    // Brief 15ms settle for OS keyboard buffer
+    std::thread::sleep(Duration::from_millis(15));
 
     if !is_tooltip {
         send_ctrl('a');
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(15));
     }
+
+    let initial_seq = get_clipboard_seq();
     send_ctrl('c');
 
-    // Poll clipboard for up to 300ms to see if it updated
-    let mut text = old_text.clone();
-    for _ in 0..6 {
-        std::thread::sleep(Duration::from_millis(50));
-        if let Ok(clip_text) = app.clipboard().read_text() {
-            if clip_text != old_text {
+    // Poll clipboard sequence number every 5ms up to 25 times (max 125ms, usually 10-25ms)
+    let mut text = String::new();
+    for _ in 0..25 {
+        std::thread::sleep(Duration::from_millis(5));
+        if get_clipboard_seq() != initial_seq {
+            if let Ok(clip_text) = app.clipboard().read_text() {
                 text = clip_text;
                 break;
             }
         }
     }
 
-    // If still matching old text, retry copy once after a short delay
-    if text == old_text {
-        std::thread::sleep(Duration::from_millis(100));
-        send_ctrl('c');
-        std::thread::sleep(Duration::from_millis(150));
+    // Fallback if sequence didn't change (e.g. app doesn't increment sequence number)
+    if text.is_empty() {
         if let Ok(clip_text) = app.clipboard().read_text() {
             text = clip_text;
+        }
+    }
+
+    // Direct native fast-path for Auto-paste (bypasses browser IPC round-trips for instant replacement)
+    let auto_paste = is_auto_paste_enabled();
+    if !is_tooltip && auto_paste && !text.trim().is_empty() {
+        let config = load_settings_rust().unwrap_or(serde_json::Value::Null);
+        let default_target = config.get("target").and_then(|v| v.as_str()).unwrap_or("vi");
+        let engine = config
+            .get("settings")
+            .and_then(|s| s.get("engine"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("google_pa");
+
+        let (target, clean_text) = translator::parse_target_tag(&text, default_target);
+
+        if let Ok(result) = translator::translate_with_fallback(&clean_text, &target, engine) {
+            let translated = result.text.trim().to_string();
+            if !translated.is_empty() {
+                let _ = app.clipboard().write_text(translated.clone());
+                let target_hwnd = *app.state::<SourceHwnd>().0.lock().unwrap();
+                if let Some(val) = target_hwnd {
+                    restore_foreground(val);
+                    std::thread::sleep(Duration::from_millis(20));
+                    send_ctrl('v');
+                }
+                let _ = app.emit(
+                    "captured-translated",
+                    serde_json::json!({
+                        "original": text,
+                        "translation": translated,
+                        "engine": result.engine,
+                        "fallback_from": result.fallback_from
+                    }),
+                );
+                return;
+            }
         }
     }
 
@@ -121,7 +168,7 @@ fn handle_capture(app: &AppHandle, is_tooltip: bool) {
             if let Some(monitor) = app.primary_monitor().unwrap_or(None) {
                 let monitor_size = monitor.size();
                 let scale_factor = monitor.scale_factor();
-                
+
                 let text_lines = text.lines().count();
                 let win_w_logical = 360.0;
                 let mut win_h_logical = 110.0;
@@ -130,17 +177,20 @@ fn handle_capture(app: &AppHandle, is_tooltip: bool) {
                 } else if text.len() > 100 {
                     win_h_logical = 150.0;
                 }
-                
+
                 let win_w_physical = (win_w_logical * scale_factor) as u32;
                 let win_h_physical = (win_h_logical * scale_factor) as u32;
-                
+
                 let offset_x_physical = (20.0 * scale_factor) as i32;
                 let offset_y_physical = (60.0 * scale_factor) as i32;
-                
+
                 let x = monitor_size.width as i32 - win_w_physical as i32 - offset_x_physical;
                 let y = monitor_size.height as i32 - win_h_physical as i32 - offset_y_physical;
-                
-                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: win_w_physical, height: win_h_physical }));
+
+                let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: win_w_physical,
+                    height: win_h_physical,
+                }));
                 let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
             }
             let _ = win.unminimize();
@@ -148,7 +198,6 @@ fn handle_capture(app: &AppHandle, is_tooltip: bool) {
             let _ = app.emit("captured-tooltip", text);
         }
     } else {
-        let auto_paste = is_auto_paste_enabled();
         if let Some(win) = app.get_webview_window("main") {
             if !auto_paste {
                 let _ = win.unminimize();
@@ -160,45 +209,32 @@ fn handle_capture(app: &AppHandle, is_tooltip: bool) {
     }
 }
 
-/// Translate via Google's free gtx endpoint (no key). Source auto-detected.
-fn translate_blocking(text: &str, target: &str) -> Result<String, String> {
-    if text.trim().is_empty() {
-        return Ok(String::new());
-    }
-    let client = reqwest::blocking::Client::new();
-    let resp = client
-        .post("https://translate.googleapis.com/translate_a/single")
-        .query(&[
-            ("client", "gtx"),
-            ("sl", "auto"),
-            ("tl", target),
-            ("dt", "t"),
-        ])
-        .form(&[("q", text)])
-        .send()
-        .map_err(|e| e.to_string())?;
+mod translator;
 
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut out = String::new();
-    if let Some(arr) = json.get(0).and_then(|v| v.as_array()) {
-        for seg in arr {
-            if let Some(s) = seg.get(0).and_then(|v| v.as_str()) {
-                out.push_str(s);
-            }
-        }
-    }
-    Ok(out)
+#[tauri::command]
+async fn translate(
+    text: String,
+    target: String,
+    engine: Option<String>,
+) -> Result<translator::TranslationResult, String> {
+    let primary = engine.unwrap_or_else(|| "google_pa".to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        translator::translate_with_fallback(&text, &target, &primary)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn translate(text: String, target: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || translate_blocking(&text, &target))
-        .await
-        .map_err(|e| e.to_string())?
+async fn benchmark_engines(
+    target: Option<String>,
+) -> Result<Vec<translator::EngineBenchmark>, String> {
+    let tgt = target.unwrap_or_else(|| "vi".to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        translator::benchmark_all_engines("Hello world", &tgt)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Put the translation on the clipboard and paste it into the source field.
@@ -215,7 +251,7 @@ fn overwrite(app: AppHandle, text: String) -> Result<(), String> {
     let target = *app.state::<SourceHwnd>().0.lock().unwrap();
     if let Some(val) = target {
         restore_foreground(val);
-        std::thread::sleep(Duration::from_millis(120));
+        std::thread::sleep(Duration::from_millis(20));
         send_ctrl('v');
     }
     Ok(())
@@ -425,6 +461,7 @@ pub fn run() {
         .manage(ActiveTooltipShortcut(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             translate,
+            benchmark_engines,
             overwrite,
             copy_text,
             hide_window,

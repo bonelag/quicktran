@@ -458,3 +458,204 @@ body.transparent-bg {
   color: #8b8f9c;
   opacity: 0.6;
 }
+
+
+.fallback-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  background: #3b351a;
+  color: #f7ba3e;
+  border: 1px solid #735919;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: none;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.tooltip-fallback-tag {
+  font-size: 10px;
+  color: #f7ba3e;
+  font-weight: normal;
+}
+
+
+/* Speed Test Styles */
+.speed-test-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #252731;
+  border: 1px solid #3a3d4a;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 4px;
+}
+
+.speed-test-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.speed-test-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c9cdd8;
+}
+
+.speed-test-btn {
+  background: #2f3444;
+  color: #8ab4ff;
+  border: 1px solid #48516d;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.speed-test-btn:hover:not(:disabled) {
+  background: #3b4257;
+  border-color: #8ab4ff;
+}
+
+.speed-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.speed-test-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.speed-test-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #1e2029;
+  border: 1px solid #323542;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.speed-test-item.active {
+  border-color: #5a7fff;
+  background: #222638;
+}
+
+.speed-test-item.err {
+  opacity: 0.75;
+}
+
+.speed-test-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.speed-test-name-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.speed-test-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e0e4f0;
+}
+
+.fastest-badge {
+  background: #143523;
+  color: #4ade80;
+  border: 1px solid #22543d;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+}
+
+.selected-badge {
+  background: #1e3a5f;
+  color: #93c5fd;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 1px 5px;
+}
+
+.speed-test-latency-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.latency-num {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.lat-fast {
+  color: #4ade80;
+}
+
+.lat-mid {
+  color: #facc15;
+}
+
+.lat-slow {
+  color: #fb923c;
+}
+
+.lat-err {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.use-engine-btn {
+  background: #2a2c36;
+  color: #8ab4ff;
+  border: 1px solid #3a3d4a;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.use-engine-btn:hover {
+  background: #5a7fff;
+  color: #ffffff;
+}
+
+.speed-test-sub {
+  display: flex;
+  font-size: 11px;
+}
+
+.speed-test-sample {
+  color: #8b8f9c;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.speed-test-error {
+  color: #f87171;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
