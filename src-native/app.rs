@@ -432,18 +432,18 @@ fn render_header(app: &mut QuickTranApp, ui: &mut egui::Ui, ctx: &egui::Context)
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let hide_btn = egui::Button::new(egui::RichText::new("Ẩn").size(12.0));
-            if ui.add_sized([42.0, 26.0], hide_btn).on_hover_text("Thu nhỏ vào khay hệ thống").clicked() {
+            if ui.add_sized([50.0, 26.0], hide_btn).on_hover_text("Thu nhỏ vào khay hệ thống").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
 
-            let btn_label = if app.view_mode == ViewMode::Settings {
-                "← Quay lại"
+            let (btn_label, btn_w) = if app.view_mode == ViewMode::Settings {
+                ("← Quay lại", 86.0)
             } else {
-                "⚙ Cài đặt"
+                ("⚙ Cài đặt", 80.0)
             };
 
             let set_btn = egui::Button::new(egui::RichText::new(btn_label).size(12.0));
-            if ui.add_sized([78.0, 26.0], set_btn).clicked() {
+            if ui.add_sized([btn_w, 26.0], set_btn).clicked() {
                 app.view_mode = if app.view_mode == ViewMode::Settings {
                     ViewMode::Translator
                 } else {
@@ -451,21 +451,23 @@ fn render_header(app: &mut QuickTranApp, ui: &mut egui::Ui, ctx: &egui::Context)
                 };
             }
 
-            // Compact engine selector on top-right, aligned with buttons
-            egui::ComboBox::from_id_salt("provider_select_top")
-                .selected_text(
-                    egui::RichText::new(engine_short_name(&app.config.provider))
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(203, 213, 225)),
-                )
-                .width(115.0)
-                .show_ui(ui, |ui| {
-                    for (id, name) in ENGINES {
-                        if ui.selectable_value(&mut app.config.provider, id.to_string(), *name).clicked() {
-                            app.config.save();
+            if app.view_mode != ViewMode::Settings {
+                // Compact engine selector on top-right, aligned with buttons
+                egui::ComboBox::from_id_salt("provider_select_top")
+                    .selected_text(
+                        egui::RichText::new(engine_short_name(&app.config.provider))
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(203, 213, 225)),
+                    )
+                    .width(115.0)
+                    .show_ui(ui, |ui| {
+                        for (id, name) in ENGINES {
+                            if ui.selectable_value(&mut app.config.provider, id.to_string(), *name).clicked() {
+                                app.config.save();
+                            }
                         }
-                    }
-                });
+                    });
+            }
         });
     });
 }

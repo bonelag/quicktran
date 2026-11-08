@@ -509,6 +509,18 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(windows)]
+                if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+                    let appdata_dir = std::path::PathBuf::from(local_appdata).join("com.quicktran.app");
+                    let _ = std::fs::remove_dir_all(&appdata_dir);
+                }
+                if let Ok(wv_folder) = std::env::var("WEBVIEW2_USER_DATA_FOLDER") {
+                    let _ = std::fs::remove_dir_all(wv_folder);
+                }
+            }
+        });
 }
