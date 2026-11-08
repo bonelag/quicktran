@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use crate::capture::{capture_foreground, capture_selected_text, get_mouse_pos, paste_text};
+use crate::capture::{capture_all_text, capture_foreground, capture_selected_text, get_mouse_pos, paste_text};
 use crate::config::AppConfig;
 use crate::hotkey::{HotkeyAction, HotkeyManager};
 use crate::translator::{benchmark_all_engines, parse_target_tag, translate_with_fallback, EngineBenchmark, TranslationResult};
@@ -327,11 +327,11 @@ impl QuickTranApp {
                             // User is actively in QuickTran typing in the input box: translate directly!
                             self.trigger_translate(false);
                         } else {
-                            // User is in an external window: capture selection
-                            let fg = capture_foreground();
-                            let captured = capture_selected_text();
-                            if let Some(text) = captured {
-                                self.source_hwnd = fg;
+                            // User is in an external window: capture foreground window
+                            self.source_hwnd = capture_foreground();
+
+                            // Automatically Ctrl+A then Ctrl+C to get full text (just like WebView)
+                            if let Some(text) = capture_all_text() {
                                 self.source_text = text;
                                 self.trigger_translate(false);
                             } else if !self.source_text.trim().is_empty() {
