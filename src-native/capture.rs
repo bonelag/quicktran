@@ -1,5 +1,4 @@
 use std::time::Duration;
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
@@ -50,6 +49,7 @@ pub fn restore_foreground(_val: isize) {}
 pub fn get_mouse_pos() -> Option<(f32, f32)> {
     extern "system" {
         fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+        fn GetSystemMetrics(nIndex: i32) -> i32;
     }
     #[repr(C)]
     struct POINT {
@@ -58,10 +58,12 @@ pub fn get_mouse_pos() -> Option<(f32, f32)> {
     }
     let mut pt = POINT { x: 0, y: 0 };
     unsafe {
-        if GetCursorPos(&mut pt) != 0 {
+        if GetCursorPos(&mut pt) != 0 && (pt.x != 0 || pt.y != 0) {
             Some((pt.x as f32, pt.y as f32))
         } else {
-            None
+            let sw = GetSystemMetrics(0);
+            let sh = GetSystemMetrics(1);
+            Some(((sw / 2) as f32, (sh / 2) as f32))
         }
     }
 }
@@ -70,6 +72,33 @@ pub fn get_mouse_pos() -> Option<(f32, f32)> {
 pub fn get_mouse_pos() -> Option<(f32, f32)> {
     None
 }
+
+/// Release all modifier and letter keys to avoid shortcuts combining with active user keypresses
+#[cfg(windows)]
+pub fn release_all_keys() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, KEYEVENTF_KEYUP, VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN,
+    };
+    extern "system" {
+        fn MapVirtualKeyW(uCode: u32, uMapType: u32) -> u32;
+    }
+    unsafe {
+        // Release modifiers
+        keybd_event(VK_MENU.0 as u8, MapVirtualKeyW(VK_MENU.0 as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_SHIFT.0 as u8, MapVirtualKeyW(VK_SHIFT.0 as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LWIN.0 as u8, MapVirtualKeyW(VK_LWIN.0 as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_RWIN.0 as u8, MapVirtualKeyW(VK_RWIN.0 as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_CONTROL.0 as u8, MapVirtualKeyW(VK_CONTROL.0 as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+
+        // Also release hotkey keys (letters A-Z) so e.g. D or Q doesn't conflict with C or A
+        for vk in 0x41u8..=0x5Au8 {
+            keybd_event(vk, MapVirtualKeyW(vk as u32, 0) as u8, KEYEVENTF_KEYUP, 0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn release_all_keys() {}
 
 /// Wait until physical modifier keys are released so synthetic Ctrl keystrokes don't conflict
 pub fn wait_for_hotkey_release() {
@@ -81,7 +110,7 @@ pub fn wait_for_hotkey_release() {
             VK_LWIN, VK_RWIN,
         };
         let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_millis(250) {
+        while start.elapsed() < Duration::from_millis(100) {
             unsafe {
                 let ctrl = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0
                     || (GetAsyncKeyState(VK_LCONTROL.0 as i32) as u16 & 0x8000) != 0
@@ -103,28 +132,42 @@ pub fn wait_for_hotkey_release() {
     }
 }
 
+#[cfg(windows)]
 pub fn send_ctrl(key: char) {
-    if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-        let k = match key {
-            'a' | 'A' => Key::A,
-            'c' | 'C' => Key::C,
-            'v' | 'V' => Key::V,
-            _ => Key::Unicode(key),
-        };
-        // Release active modifiers synthetically so hotkey modifiers don't conflict
-        let _ = enigo.key(Key::Alt, Direction::Release);
-        let _ = enigo.key(Key::Shift, Direction::Release);
-        let _ = enigo.key(Key::Meta, Direction::Release);
-        let _ = enigo.key(Key::Control, Direction::Release);
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, KEYEVENTF_KEYUP, VK_CONTROL,
+    };
+    extern "system" {
+        fn MapVirtualKeyW(uCode: u32, uMapType: u32) -> u32;
+    }
 
-        // Press Control + key quickly (8ms)
-        let _ = enigo.key(Key::Control, Direction::Press);
-        std::thread::sleep(Duration::from_millis(8));
-        let _ = enigo.key(k, Direction::Click);
-        std::thread::sleep(Duration::from_millis(8));
-        let _ = enigo.key(Key::Control, Direction::Release);
+    release_all_keys();
+    std::thread::sleep(Duration::from_millis(15));
+
+    let vk = match key {
+        'a' | 'A' => 0x41u8,
+        'c' | 'C' => 0x43u8,
+        'v' | 'V' => 0x56u8,
+        _ => key.to_ascii_uppercase() as u8,
+    };
+
+    unsafe {
+        let scan_ctrl = MapVirtualKeyW(VK_CONTROL.0 as u32, 0) as u8;
+        let scan_key = MapVirtualKeyW(vk as u32, 0) as u8;
+
+        // Press Control + key with proper scan codes
+        keybd_event(VK_CONTROL.0 as u8, scan_ctrl, Default::default(), 0);
+        std::thread::sleep(Duration::from_millis(15));
+        keybd_event(vk, scan_key, Default::default(), 0);
+        std::thread::sleep(Duration::from_millis(25));
+        keybd_event(vk, scan_key, KEYEVENTF_KEYUP, 0);
+        std::thread::sleep(Duration::from_millis(15));
+        keybd_event(VK_CONTROL.0 as u8, scan_ctrl, KEYEVENTF_KEYUP, 0);
     }
 }
+
+#[cfg(not(windows))]
+pub fn send_ctrl(_key: char) {}
 
 /// Capture text from the active foreground window.
 /// If `select_all` is true, sends Ctrl+A first to select all text.
@@ -142,7 +185,7 @@ pub fn capture_text_from_window(select_all: bool) -> Option<String> {
     send_ctrl('c');
 
     let mut text = String::new();
-    for _ in 0..30 {
+    for _ in 0..25 {
         std::thread::sleep(Duration::from_millis(10));
         if get_clipboard_seq() != initial_seq {
             if let Ok(mut clip) = arboard::Clipboard::new() {
@@ -150,6 +193,15 @@ pub fn capture_text_from_window(select_all: bool) -> Option<String> {
                     text = clip_text;
                     break;
                 }
+            }
+        }
+    }
+
+    // For tooltip on selection: if sequence didn't change (e.g. app doesn't increment seq or user already copied), read clipboard
+    if !select_all && text.is_empty() {
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if let Ok(clip_text) = clip.get_text() {
+                text = clip_text;
             }
         }
     }
@@ -183,3 +235,5 @@ pub fn paste_text(text: &str, source_hwnd: Option<isize>) {
 
     send_ctrl('v');
 }
+
+
