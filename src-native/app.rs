@@ -536,11 +536,18 @@ impl eframe::App for QuickTranApp {
                     .with_title("QuickTran Tooltip")
                     .with_inner_size([380.0, 160.0])
                     .with_always_on_top()
-                    .with_decorations(false)
-                    .with_transparent(true);
+                    .with_decorations(false);
 
-                if let Some((mx, my)) = self.tooltip_pos {
-                    vb = vb.with_position([mx + 12.0, my + 12.0]);
+                if let Some((px, py)) = self.tooltip_pos {
+                    let ppp = ctx.pixels_per_point();
+                    let mx = px / ppp;
+                    let my = py / ppp;
+                    let screen_rect = ctx.screen_rect();
+                    let w = 380.0;
+                    let h = 160.0;
+                    let x = (mx + 12.0).min(screen_rect.max.x - w - 10.0).max(10.0);
+                    let y = (my + 12.0).min(screen_rect.max.y - h - 10.0).max(10.0);
+                    vb = vb.with_position([x, y]);
                 }
 
                 let target_text = self.tooltip_target.clone();
@@ -552,6 +559,9 @@ impl eframe::App for QuickTranApp {
                     egui::ViewportId::from_hash_of("quicktran_tooltip"),
                     vb,
                     |ctx, _class| {
+                        #[cfg(windows)]
+                        crate::tray::make_tooltip_toolwindow();
+
                         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                             close_tooltip = true;
                         }

@@ -114,6 +114,25 @@ pub fn is_window_hidden_to_tray() -> bool {
     }
 }
 
+#[cfg(windows)]
+pub fn make_tooltip_toolwindow() {
+    let title: Vec<u16> = "QuickTran Tooltip\0".encode_utf16().collect();
+    unsafe {
+        let hwnd = FindWindowW(core::ptr::null(), title.as_ptr());
+        if hwnd != 0 {
+            let ex_style = GetWindowLongW(hwnd, -20);
+            if (ex_style & 0x00000080) == 0 {
+                let new_style = (ex_style | 0x00000080) & !0x00040000;
+                SetWindowLongW(hwnd, -20, new_style);
+                SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn make_tooltip_toolwindow() {}
+
 #[cfg(not(windows))]
 pub fn hide_window_to_tray() {}
 
