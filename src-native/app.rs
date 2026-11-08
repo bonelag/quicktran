@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use crate::capture::{capture_foreground, capture_selected_text, paste_text};
+use crate::capture::{capture_foreground, capture_selected_text, get_mouse_pos, paste_text};
 use crate::config::AppConfig;
 use crate::hotkey::{HotkeyAction, HotkeyManager};
 use crate::translator::{benchmark_all_engines, parse_target_tag, translate_with_fallback, EngineBenchmark, TranslationResult};
@@ -153,6 +153,7 @@ pub struct QuickTranApp {
     pub tooltip_engine: String,
     pub tooltip_latency: Option<u64>,
     pub tooltip_timer: Instant,
+    pub tooltip_pos: Option<(f32, f32)>,
 
     // Benchmark state
     pub is_benchmarking: bool,
@@ -235,6 +236,7 @@ impl QuickTranApp {
             tooltip_engine: String::new(),
             tooltip_latency: None,
             tooltip_timer: Instant::now(),
+            tooltip_pos: None,
 
             is_benchmarking: false,
             benchmark_results: Vec::new(),
@@ -317,11 +319,17 @@ impl QuickTranApp {
             match event {
                 AppEvent::Hotkey(action) => match action {
                     HotkeyAction::Translate => {
-                        self.source_hwnd = capture_foreground();
-                        if let Some(text) = capture_selected_text() {
+                        let fg = capture_foreground();
+                        let captured = capture_selected_text();
+                        if let Some(text) = captured {
+                            self.source_hwnd = fg;
                             self.source_text = text;
                             self.trigger_translate(false);
+                        } else if !self.source_text.trim().is_empty() {
+                            // User pressed hotkey directly while typing in the input box!
+                            self.trigger_translate(false);
                         }
+
                         if !self.config.auto_overwrite {
                             show_and_focus_window();
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -331,9 +339,19 @@ impl QuickTranApp {
                     }
                     HotkeyAction::Tooltip => {
                         self.source_hwnd = capture_foreground();
-                        if let Some(text) = capture_selected_text() {
+                        let captured = capture_selected_text();
+                        let text = if let Some(t) = captured {
+                            t
+                        } else if !self.source_text.trim().is_empty() {
+                            self.source_text.clone()
+                        } else {
+                            String::new()
+                        };
+
+                        if !text.is_empty() {
                             self.tooltip_source = text;
                             self.tooltip_target = "Đang dịch...".to_string();
+                            self.tooltip_pos = get_mouse_pos();
                             self.show_tooltip = true;
                             self.tooltip_timer = Instant::now();
                             self.trigger_translate(true);
@@ -494,48 +512,77 @@ impl eframe::App for QuickTranApp {
 
         // Render Tooltip Viewport (Secondary popup)
         if self.show_tooltip {
+            // Keep repainting so the 8s timer ticks reliably
+            ctx.request_repaint_after(Duration::from_millis(200));
+
             if self.tooltip_timer.elapsed() > Duration::from_secs(8) {
                 self.show_tooltip = false;
             } else {
+                let mut close_tooltip = false;
+                let mut copied = false;
+
+                let mut vb = egui::ViewportBuilder::default()
+                    .with_title("QuickTran Tooltip")
+                    .with_inner_size([380.0, 160.0])
+                    .with_always_on_top()
+                    .with_decorations(false)
+                    .with_transparent(true);
+
+                if let Some((mx, my)) = self.tooltip_pos {
+                    vb = vb.with_position([mx + 12.0, my + 12.0]);
+                }
+
+                let target_text = self.tooltip_target.clone();
+                let source_text = self.tooltip_source.clone();
+                let latency = self.tooltip_latency;
+                let engine = self.tooltip_engine.clone();
+
                 ctx.show_viewport_immediate(
                     egui::ViewportId::from_hash_of("quicktran_tooltip"),
-                    egui::ViewportBuilder::default()
-                        .with_title("QuickTran Preview")
-                        .with_inner_size([380.0, 160.0])
-                        .with_always_on_top()
-                        .with_decorations(false)
-                        .with_transparent(true),
+                    vb,
                     |ctx, _class| {
+                        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            close_tooltip = true;
+                        }
+
                         egui::CentralPanel::default()
-                            .frame(egui::Frame::NONE
-                                .fill(egui::Color32::from_rgb(26, 27, 38))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(122, 162, 247)))
-                                .corner_radius(10.0)
-                                .inner_margin(12.0))
+                            .frame(
+                                egui::Frame::NONE
+                                    .fill(egui::Color32::from_rgb(26, 27, 38))
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(122, 162, 247)))
+                                    .corner_radius(10.0)
+                                    .inner_margin(12.0),
+                            )
                             .show(ctx, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.colored_label(egui::Color32::from_rgb(122, 162, 247), "⚡ QuickTran Tooltip");
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("✕").clicked() {
-                                            // Close tooltip
+                                        let close_btn = egui::Button::new(
+                                            egui::RichText::new("✕")
+                                                .size(13.0)
+                                                .color(egui::Color32::from_rgb(203, 213, 225)),
+                                        );
+                                        if ui.add_sized([24.0, 24.0], close_btn).clicked() {
+                                            close_tooltip = true;
                                         }
                                     });
                                 });
 
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new(&self.tooltip_source).italics().weak().size(11.0));
+                                ui.label(egui::RichText::new(&source_text).italics().weak().size(11.0));
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new(&self.tooltip_target).strong().size(14.0));
+                                ui.label(egui::RichText::new(&target_text).strong().size(14.0));
 
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
-                                    if let Some(lat) = self.tooltip_latency {
-                                        ui.label(egui::RichText::new(format!("⏱ {}ms • {}", lat, self.tooltip_engine)).size(10.0).weak());
+                                    if let Some(lat) = latency {
+                                        ui.label(egui::RichText::new(format!("⏱ {}ms • {}", lat, engine)).size(10.0).weak());
                                     }
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui.button("📋 Sao chép").clicked() {
                                             if let Ok(mut clip) = arboard::Clipboard::new() {
-                                                let _ = clip.set_text(self.tooltip_target.clone());
+                                                let _ = clip.set_text(target_text.clone());
+                                                copied = true;
                                             }
                                         }
                                     });
@@ -543,6 +590,13 @@ impl eframe::App for QuickTranApp {
                             });
                     },
                 );
+
+                if close_tooltip {
+                    self.show_tooltip = false;
+                }
+                if copied {
+                    self.set_toast("Đã sao chép vào clipboard!");
+                }
             }
         }
 

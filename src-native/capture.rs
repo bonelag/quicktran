@@ -46,6 +46,31 @@ pub fn capture_foreground() -> Option<isize> {
 #[cfg(not(windows))]
 pub fn restore_foreground(_val: isize) {}
 
+#[cfg(windows)]
+pub fn get_mouse_pos() -> Option<(f32, f32)> {
+    extern "system" {
+        fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    }
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe {
+        if GetCursorPos(&mut pt) != 0 {
+            Some((pt.x as f32, pt.y as f32))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn get_mouse_pos() -> Option<(f32, f32)> {
+    None
+}
+
 pub fn send_ctrl(key: char) {
     if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
         let k = match key {
@@ -89,10 +114,10 @@ pub fn capture_selected_text() -> Option<String> {
     }
 
     if !changed {
-        std::thread::sleep(Duration::from_millis(20));
+        return None;
     }
 
-    // Read clipboard
+    // Read clipboard only when sequence number actually changed
     if let Ok(mut clip) = arboard::Clipboard::new() {
         if let Ok(text) = clip.get_text() {
             let trimmed = text.trim();
