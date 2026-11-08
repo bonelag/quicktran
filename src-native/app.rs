@@ -532,9 +532,18 @@ impl eframe::App for QuickTranApp {
                 let mut close_tooltip = false;
                 let mut copied = false;
 
+                let target_text = self.tooltip_target.clone();
+                let source_text = self.tooltip_source.clone();
+                let latency = self.tooltip_latency;
+                let engine = self.tooltip_engine.clone();
+
+                let total_lines = source_text.lines().count() + target_text.lines().count() + (target_text.len() / 45);
+                let win_w = 390.0f32;
+                let win_h = (175.0 + (total_lines.saturating_sub(2) as f32 * 20.0)).clamp(180.0, 320.0);
+
                 let mut vb = egui::ViewportBuilder::default()
                     .with_title("QuickTran Tooltip")
-                    .with_inner_size([380.0, 160.0])
+                    .with_inner_size([win_w, win_h])
                     .with_always_on_top()
                     .with_decorations(false);
 
@@ -543,17 +552,10 @@ impl eframe::App for QuickTranApp {
                     let mx = px / ppp;
                     let my = py / ppp;
                     let screen_rect = ctx.screen_rect();
-                    let w = 380.0;
-                    let h = 160.0;
-                    let x = (mx + 12.0).min(screen_rect.max.x - w - 10.0).max(10.0);
-                    let y = (my + 12.0).min(screen_rect.max.y - h - 10.0).max(10.0);
+                    let x = (mx + 12.0).min(screen_rect.max.x - win_w - 10.0).max(10.0);
+                    let y = (my + 12.0).min(screen_rect.max.y - win_h - 10.0).max(10.0);
                     vb = vb.with_position([x, y]);
                 }
-
-                let target_text = self.tooltip_target.clone();
-                let source_text = self.tooltip_source.clone();
-                let latency = self.tooltip_latency;
-                let engine = self.tooltip_engine.clone();
 
                 let mut reset_timer = false;
 
@@ -596,9 +598,15 @@ impl eframe::App for QuickTranApp {
                                 }
 
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new(&source_text).italics().weak().size(11.0));
-                                ui.add_space(4.0);
-                                ui.label(egui::RichText::new(&target_text).strong().size(14.0));
+
+                                let max_content_h = (win_h - 85.0).max(60.0);
+                                egui::ScrollArea::vertical()
+                                    .max_height(max_content_h)
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new(&source_text).italics().weak().size(11.0));
+                                        ui.add_space(4.0);
+                                        ui.label(egui::RichText::new(&target_text).strong().size(14.0));
+                                    });
 
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
