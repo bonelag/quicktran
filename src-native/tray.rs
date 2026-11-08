@@ -9,23 +9,113 @@ pub enum TrayAction {
 }
 
 #[cfg(windows)]
-pub fn show_and_focus_window() {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-    };
-    use windows::core::PCWSTR;
+static LAST_WINDOW_POS: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
+#[cfg(windows)]
+static IS_TRAY_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct RECT {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(windows)]
+extern "system" {
+    fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+    fn GetWindowRect(hWnd: isize, lpRect: *mut RECT) -> i32;
+    fn SetWindowPos(hWnd: isize, hWndInsertAfter: isize, X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32) -> i32;
+    fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
+    fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
+    fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    fn SetForegroundWindow(hWnd: isize) -> i32;
+    fn GetSystemMetrics(nIndex: i32) -> i32;
+}
+
+#[cfg(windows)]
+pub fn hide_window_to_tray() {
     let title: Vec<u16> = "QuickTran Native\0".encode_utf16().collect();
     unsafe {
-        if let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) {
-            if !hwnd.0.is_null() {
-                let _ = ShowWindow(hwnd, SW_SHOW);
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                let _ = SetForegroundWindow(hwnd);
+        let hwnd = FindWindowW(core::ptr::null(), title.as_ptr());
+        if hwnd != 0 {
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect) != 0 && rect.left > -10000 {
+                let w = rect.right - rect.left;
+                let h = rect.bottom - rect.top;
+                if w > 100 && h > 100 {
+                    *LAST_WINDOW_POS.lock().unwrap() = Some((rect.left, rect.top, w, h));
+                }
             }
+
+            // Set WS_EX_TOOLWINDOW and clear WS_EX_APPWINDOW to remove from taskbar & Alt-Tab
+            let ex_style = GetWindowLongW(hwnd, -20);
+            let new_style = (ex_style | 0x00000080) & !0x00040000;
+            SetWindowLongW(hwnd, -20, new_style);
+
+            // Move off-screen without SW_HIDE so winit event loop and repaint requests remain active
+            SetWindowPos(
+                hwnd,
+                0,
+                -32000,
+                -32000,
+                0,
+                0,
+                0x0001 | 0x0004 | 0x0010 | 0x0020, // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            );
+            IS_TRAY_HIDDEN.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
+
+#[cfg(windows)]
+pub fn show_and_focus_window() {
+    let title: Vec<u16> = "QuickTran Native\0".encode_utf16().collect();
+    unsafe {
+        let hwnd = FindWindowW(core::ptr::null(), title.as_ptr());
+        if hwnd != 0 {
+            let ex_style = GetWindowLongW(hwnd, -20);
+            let new_style = (ex_style | 0x00040000) & !0x00000080; // +APPWINDOW, -TOOLWINDOW
+            SetWindowLongW(hwnd, -20, new_style);
+
+            if IS_TRAY_HIDDEN.load(std::sync::atomic::Ordering::SeqCst) {
+                let saved = LAST_WINDOW_POS.lock().unwrap().clone();
+                if let Some((x, y, w, h)) = saved {
+                    SetWindowPos(hwnd, 0, x, y, w, h, 0x0004 | 0x0040 | 0x0020);
+                } else {
+                    let sw = GetSystemMetrics(0);
+                    let sh = GetSystemMetrics(1);
+                    let w = 440;
+                    let h = 390;
+                    let x = (sw - w) / 2;
+                    let y = (sh - h) / 2;
+                    SetWindowPos(hwnd, 0, x, y, w, h, 0x0004 | 0x0040 | 0x0020);
+                }
+                IS_TRAY_HIDDEN.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+
+            let _ = ShowWindow(hwnd, 5); // SW_SHOW
+            let _ = ShowWindow(hwnd, 9); // SW_RESTORE
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+pub fn is_window_hidden_to_tray() -> bool {
+    #[cfg(windows)]
+    {
+        IS_TRAY_HIDDEN.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+pub fn hide_window_to_tray() {}
 
 #[cfg(not(windows))]
 pub fn show_and_focus_window() {}

@@ -8,7 +8,7 @@ use crate::capture::{capture_all_text, capture_foreground, capture_selected_text
 use crate::config::AppConfig;
 use crate::hotkey::{HotkeyAction, HotkeyManager};
 use crate::translator::{benchmark_all_engines, parse_target_tag, translate_with_fallback, EngineBenchmark, TranslationResult};
-use crate::tray::{show_and_focus_window, SystemTray, TrayAction};
+use crate::tray::{hide_window_to_tray, is_window_hidden_to_tray, show_and_focus_window, SystemTray, TrayAction};
 
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("auto", "Tự động phát hiện"),
@@ -322,7 +322,8 @@ impl QuickTranApp {
             match event {
                 AppEvent::Hotkey(action) => match action {
                     HotkeyAction::Translate => {
-                        let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+                        let is_focused = !is_window_hidden_to_tray()
+                            && ctx.input(|i| i.viewport().focused.unwrap_or(false));
                         if is_focused && !self.source_text.trim().is_empty() {
                             // User is actively in QuickTran typing in the input box: translate directly!
                             self.trigger_translate(false);
@@ -340,14 +341,13 @@ impl QuickTranApp {
 
                             if !self.config.auto_overwrite {
                                 show_and_focus_window();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                             }
                         }
                     }
                     HotkeyAction::Tooltip => {
-                        let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+                        let is_focused = !is_window_hidden_to_tray()
+                            && ctx.input(|i| i.viewport().focused.unwrap_or(false));
                         let text = if is_focused && !self.source_text.trim().is_empty() {
                             self.source_text.clone()
                         } else {
@@ -410,14 +410,12 @@ impl QuickTranApp {
                 AppEvent::Tray(action) => match action {
                     TrayAction::OpenTranslator => {
                         self.view_mode = ViewMode::Translator;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        show_and_focus_window();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     TrayAction::OpenSettings => {
                         self.view_mode = ViewMode::Settings;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        show_and_focus_window();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                 },
@@ -499,8 +497,14 @@ impl eframe::App for QuickTranApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.config.close_to_tray {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                hide_window_to_tray();
             }
+        }
+
+        // If minimized and close_to_tray is enabled, tuck cleanly into tray
+        if self.config.close_to_tray && ctx.input(|i| i.viewport().minimized == Some(true)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            hide_window_to_tray();
         }
 
         // Hide on Escape key (when not listening for key)
@@ -508,7 +512,7 @@ impl eframe::App for QuickTranApp {
             if self.view_mode == ViewMode::Settings {
                 self.view_mode = ViewMode::Translator;
             } else if self.config.close_to_tray {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                hide_window_to_tray();
             }
         }
 
@@ -640,7 +644,7 @@ impl eframe::App for QuickTranApp {
     }
 }
 
-fn render_header(app: &mut QuickTranApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+fn render_header(app: &mut QuickTranApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("QuickTran")
@@ -657,7 +661,7 @@ fn render_header(app: &mut QuickTranApp, ui: &mut egui::Ui, ctx: &egui::Context)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let hide_btn = egui::Button::new(egui::RichText::new("Ẩn").size(12.0));
             if ui.add_sized([50.0, 26.0], hide_btn).on_hover_text("Thu nhỏ vào khay hệ thống").clicked() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                hide_window_to_tray();
             }
 
             let (btn_label, btn_w) = if app.view_mode == ViewMode::Settings {
