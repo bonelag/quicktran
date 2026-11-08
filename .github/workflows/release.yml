@@ -25,8 +25,6 @@ jobs:
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
 
       - name: Install dependencies
         run: npm ci
@@ -37,16 +35,29 @@ jobs:
         run: |
           version=$(jq -r '.version' package.json)
           echo "version=v$version" >> $GITHUB_OUTPUT
+          echo "raw_version=$version" >> $GITHUB_OUTPUT
 
-      - name: Build Tauri App
+      - name: Build Tauri App (WebView)
         run: npm run tauri build
 
-      - name: Create or Update Release and Upload Asset
+      - name: Build Native App
+        run: cargo build --release
+
+      - name: Prepare Release Binaries
+        shell: bash
+        run: |
+          ver="${{ steps.get_version.outputs.raw_version }}"
+          cp src-tauri/target/release/QuickTran.exe "QuickTran-${ver}-webview.exe"
+          cp target/release/quicktran.exe "QuickTran-${ver}-native.exe"
+
+      - name: Create or Update Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
           name: QuickTran ${{ steps.get_version.outputs.version }}
-          files: src-tauri/target/release/QuickTran.exe
+          files: |
+            QuickTran-${{ steps.get_version.outputs.raw_version }}-webview.exe
+            QuickTran-${{ steps.get_version.outputs.raw_version }}-native.exe
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
